@@ -93,25 +93,37 @@ def check_git_status():
 
 def check_requirements(requirements='requirements.txt', exclude=()):
     # Check installed dependencies meet requirements (pass *.txt file or list of packages)
-    import pkg_resources as pkg
+    import sys
+    from importlib.metadata import PackageNotFoundError, version
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
     prefix = colorstr('red', 'bold', 'requirements:')
     if isinstance(requirements, (str, Path)):  # requirements.txt file
         file = Path(requirements)
         if not file.exists():
             print(f"{prefix} {file.resolve()} not found, check failed.")
             return
-        requirements = [f'{x.name}{x.specifier}' for x in pkg.parse_requirements(file.open()) if x.name not in exclude]
+        requirements = [line.split('#', 1)[0].strip() for line in file.read_text().splitlines()]
+        requirements = [line for line in requirements if line]
     else:  # list or tuple of packages
         requirements = [x for x in requirements if x not in exclude]
 
     n = 0  # number of packages updates
-    for r in requirements:
+    excluded = {canonicalize_name(name) for name in exclude}
+    for raw in requirements:
+        requirement = Requirement(raw)
+        if canonicalize_name(requirement.name) in excluded:
+            continue
+        if requirement.marker and not requirement.marker.evaluate():
+            continue
         try:
-            pkg.require(r)
-        except Exception as e:  # DistributionNotFound or VersionConflict if requirements not met
+            satisfied = requirement.specifier.contains(version(requirement.name))
+        except PackageNotFoundError:
+            satisfied = False
+        if not satisfied:
             n += 1
-            print(f"{prefix} {e.req} not found and is required by YOLOR, attempting auto-update...")
-            print(subprocess.check_output(f"pip install '{e.req}'", shell=True).decode())
+            print(f"{prefix} {requirement} is required by YOLOR, attempting auto-update...")
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', str(requirement)])
 
     if n:  # if packages updated
         source = file.resolve() if 'file' in locals() else requirements
